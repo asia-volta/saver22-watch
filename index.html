@@ -73,6 +73,7 @@ async function refresh(force=false){
   await keys();let payload=null,live=false;
   if(apiBase){try{payload=await(await api('/api/snapshot')).arrayBuffer();live=true;}catch(_){}}
   if(!payload){const target=new URL('./payload.enc',location.origin+location.pathname);target.searchParams.set('v',Date.now().toString());const response=await fetchBounded(target.href);if(!response.ok)throw new Error('Snapshot non disponibile. Riprova tra poco.');payload=await response.arrayBuffer();}
+  if(!force&&(dialogOpen||actionBusy||manualBusy))return;
   const changed=await applyPayload(payload,current);
   if(current===generation&&changed)notice(live?'Registro sincronizzato':'Snapshot pubblicato · Mac non collegato');
  }catch(error){if(current===generation)notice(error.message||'Impossibile aprire lo snapshot.');}
@@ -108,21 +109,22 @@ window.addEventListener('message',async event=>{
  if(event.source!==frame.contentWindow||!event.data||typeof event.data!=='object')return;
  const data=event.data;
  if(data.type==='saver22:dialog-state'){dialogOpen=data.open===true;buttons();return;}
- if(!['saver22:archive','saver22:restore','saver22:contact','saver22:uncontact'].includes(data.type))return;
+ if(!['saver22:archive','saver22:restore','saver22:contact','saver22:uncontact','saver22:notes'].includes(data.type))return;
  if(typeof data.requestId!=='string'||!/^[A-Za-z0-9_.-]{1,100}$/.test(data.requestId))return;
- const reply=(ok,error)=>frame.contentWindow.postMessage({type:'saver22:action-result',requestId:data.requestId,ok,...(error?{error}:{})},'*');
+ const reply=(ok,error,extra={})=>frame.contentWindow.postMessage({type:'saver22:action-result',requestId:data.requestId,ok,...extra,...(error?{error}:{})},'*');
  if(actionBusy||manualBusy){reply(false,'Attendi la conclusione dell’operazione in corso.');return;}
  if(typeof data.id!=='string'||!/^\d{1,20}$/.test(data.id)){reply(false,'Identificativo annuncio non valido.');return;}
  if(data.type==='saver22:archive'&&(!Array.isArray(data.reasons)||data.reasons.length>12||data.reasons.some(x=>typeof x!=='string'||x.length>160)||typeof data.note!=='string'||data.note.length>2000)){reply(false,'Motivazione non valida.');return;}
+ if(data.type==='saver22:notes'&&(typeof data.notes!=='string'||data.notes.length>4000||typeof data.expected_revision!=='string'||!/^[a-f0-9]{64}$/.test(data.expected_revision))){reply(false,'Note non valide.');return;}
  actionBusy=true;buttons();const current=generation;
  try{
   const archive=data.type==='saver22:archive';
   const action=data.type.slice('saver22:'.length);
-  const result=await apiJson('/api/'+action,{id:data.id,...(archive?{reasons:data.reasons,note:data.note}:{})});
+  const result=await apiJson('/api/'+action,{id:data.id,...(archive?{reasons:data.reasons,note:data.note}:action==='notes'?{notes:data.notes,expected_revision:data.expected_revision}:{})});
   if(result.ok!==true)throw new Error(result.error||'Salvataggio non confermato.');
   if(current!==generation)return;
-  reply(true);dialogOpen=false;await refresh(true);
-  notice({archive:'Annuncio archiviato. Ti avviserò comunque in caso di ribasso.',restore:'Annuncio ripristinato nella lista attiva.',contact:'Segnato come contattato. Nessun messaggio inviato automaticamente.',uncontact:'Stato contattato annullato.'}[action]);
+  reply(true,undefined,action==='notes'?{notes_revision:result.notes_revision}:{});dialogOpen=false;await refresh(true);
+  notice({archive:'Annuncio archiviato. Ti avviserò comunque in caso di ribasso.',restore:'Annuncio ripristinato nella lista attiva.',contact:'Segnato come contattato. Nessun messaggio inviato automaticamente.',uncontact:'Stato contattato annullato.',notes:'Note salvate.'}[action]);
  }catch(error){if(current===generation){reply(false,error.message||'Salvataggio non riuscito.');notice(error.message);}}
  finally{actionBusy=false;buttons();}
 });
