@@ -1,73 +1,134 @@
 <!doctype html>
 <html lang="it"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="robots" content="noindex,nofollow,noarchive">
-<meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'; frame-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta name="robots" content="noindex,nofollow,noarchive"><meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'self' https://sword-cliff-corp-fill.trycloudflare.com; frame-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <title>Saver 22 · Vista privata</title>
 <style>
-*{box-sizing:border-box}html,body{height:100%;margin:0}body{font:15px system-ui,sans-serif;background:#f2f5f8;color:#172337;display:flex;flex-direction:column}header{padding:.6rem 1rem;background:#172337;color:#fff;display:flex;align-items:center;gap:.5rem 1rem;flex-wrap:wrap}h1{font-size:1rem;margin:0}#status{margin:0;font-size:.82rem;flex:1;min-width:180px}button{font:inherit;border:1px solid #a5b8cb;border-radius:5px;padding:.4rem .65rem;background:transparent;color:inherit;cursor:pointer}iframe{border:0;display:block;width:100%;flex:1;min-height:0;background:#fff}iframe[hidden]{display:none}#help{max-width:650px;margin:10vh auto;padding:1.5rem;line-height:1.6}#help[hidden]{display:none}@media(max-width:600px){header{padding:.5rem}#status{order:3;width:100%;flex-basis:100%}h1{flex:1}}
+*{box-sizing:border-box}html,body{height:100%;margin:0}body{font:15px system-ui,sans-serif;background:#f2f5f8;color:#172337;display:flex;flex-direction:column}header{padding:.65rem 1rem;background:#172337;color:#fff;display:flex;align-items:center;gap:.5rem 1rem;flex-wrap:wrap}h1{font-size:1rem;margin:0}.state{flex:1;min-width:180px}#status{margin:0;font-size:.84rem}#checked{display:block;margin-top:.2rem;font-size:.74rem;color:#b7cbe0}button{font:inherit;border:1px solid #a5b8cb;border-radius:6px;min-height:44px;padding:.4rem .7rem;background:transparent;color:inherit;cursor:pointer}button:disabled{opacity:.55;cursor:wait}iframe{border:0;display:block;width:100%;flex:1;min-height:0;background:#fff}iframe[hidden]{display:none}#help{max-width:650px;margin:10vh auto;padding:1.5rem;line-height:1.6}#help[hidden]{display:none}@media(max-width:600px){header{padding:.5rem}h1{flex:1}.state{order:3;width:100%;flex-basis:100%}}
 </style></head><body>
-<header><h1>Saver 22 · Vista privata</h1><p id="status" role="status" aria-live="polite">Apertura protetta…</p><button id="refresh" type="button">Controlla ora</button></header>
-<section id="help"><h2>Dashboard cifrata</h2><p id="message">Per aprire questa vista serve il collegamento privato completo, inclusa la parte dopo #. Non condividere quel collegamento.</p><p>Il controllo di nuovi snapshot avviene ogni minuto quando la pagina è visibile. La pubblicazione dipende dal monitor locale: un controllo non significa che tutti i dati siano stati aggiornati.</p></section>
+<header><h1>Saver 22</h1><div class="state"><p id="status" role="status" aria-live="polite">Apertura protetta…</p><small id="checked">Controllo automatico ogni ora</small></div><button id="refresh" type="button">Controlla ora</button></header>
+<section id="help"><h2>Dashboard cifrata</h2><p id="message">Apri il collegamento privato completo, inclusa la parte dopo #. Non condividerlo.</p><p>«Controlla ora» avvia una nuova ricerca su Subito. Archiviazione e controlli manuali richiedono che il Mac sia acceso e collegato; in caso contrario resta disponibile l’ultima versione pubblicata.</p></section>
 <iframe id="dashboard" title="Annunci Saver 22" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" hidden></iframe>
 <script>
 'use strict';
+const configuredApi = "https://sword-cliff-corp-fill.trycloudflare.com";
+const apiBase = location.hostname.endsWith('.trycloudflare.com') ? location.origin : configuredApi;
 const frame = document.getElementById('dashboard');
 const status = document.getElementById('status');
+const checked = document.getElementById('checked');
 const help = document.getElementById('help');
 const message = document.getElementById('message');
-let lastPayloadDigest = '', busy = false, generation = 0, publishedLabel = '';
-function notice(text) { status.textContent = text; if (frame.hidden) {help.hidden = false; message.textContent = text;} }
-function readKey() {
-  const match = /^#k=([A-Za-z0-9_-]{43})$/.exec(location.hash);
-  if (!match) throw new Error(location.hash ? 'Collegamento privato non valido: verifica la chiave dopo #.' : 'Chiave mancante. Apri il collegamento privato completo, inclusa la parte dopo #.');
-  const bytes = Uint8Array.from(atob(match[1].replace(/-/g, '+').replace(/_/g, '/') + '='), c => c.charCodeAt(0));
-  if (bytes.length !== 32) throw new Error('Chiave non valida.');
-  return bytes;
+const checkButton = document.getElementById('refresh');
+let keyPromise=null, lastPayloadDigest='', generation=0, refreshBusy=false, manualBusy=false, actionBusy=false, dialogOpen=false;
+function notice(text){status.textContent=text;if(frame.hidden){help.hidden=false;message.textContent=text;}}
+function buttons(){checkButton.disabled=manualBusy||actionBusy||dialogOpen;checkButton.textContent=manualBusy?'Controllo in corso…':'Controlla ora';}
+function lastChecked(value){if(value){const d=new Date(value);if(!Number.isNaN(d.getTime()))checked.textContent='Ultimo controllo Subito: '+d.toLocaleString('it-IT')+' · Ogni ora';}}
+function readKey(){
+ const m=/^#k=([A-Za-z0-9_-]{43})$/.exec(location.hash);
+ if(!m)throw new Error(location.hash?'Collegamento privato non valido: verifica la chiave dopo #.':'Chiave mancante. Apri il collegamento privato completo, inclusa la chiave dopo #.');
+ const b=Uint8Array.from(atob(m[1].replace(/-/g,'+').replace(/_/g,'/')+'='),c=>c.charCodeAt(0));
+ if(b.length!==32)throw new Error('Chiave non valida.');return b;
 }
-async function refresh() {
-  if (busy || document.hidden) return;
-  busy = true;
-  const current = generation;
-  try {
-    if (!window.isSecureContext || !crypto.subtle) throw new Error('Serve una connessione HTTPS per aprire questa dashboard.');
-    const rawKey = readKey();
-    const key = await crypto.subtle.importKey('raw', rawKey, {name: 'AES-GCM'}, false, ['decrypt']);
-    rawKey.fill(0);
-    // Construct from pathname only: never send the fragment or any incoming query.
-    const target = new URL('./payload.enc', location.origin + location.pathname);
-    target.searchParams.set('v', Date.now().toString());
-    let response, payload;
-    try {
-      response = await fetch(target.href, {cache: 'no-store', credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer'});
-      if (!response.ok) throw new Error();
-      payload = await response.arrayBuffer();
-    } catch (_) { throw new Error('Snapshot non disponibile. Riprova tra poco; l’ultima vista aperta resta visibile.'); }
-    if (current !== generation) return;
-    if (payload.byteLength < 28) throw new Error('Snapshot non valido o incompleto. Riprova tra poco.');
-    const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', payload)), b => b.toString(16).padStart(2, '0')).join('');
-    if (digest === lastPayloadDigest) {notice(publishedLabel + ' · Nessun nuovo snapshot'); return;}
-    let decoded;
-    try {
-      const bytes = new Uint8Array(payload);
-      decoded = new TextDecoder('utf-8', {fatal: true}).decode(await crypto.subtle.decrypt({name: 'AES-GCM', iv: bytes.slice(0,12)}, key, bytes.slice(12)));
-    } catch (_) { throw new Error('Chiave errata o snapshot danneggiato. Verifica il collegamento privato.'); }
-    if (current !== generation) return;
-    const stamp = /<!-- Snapshot pubblicato: ([^<>]+) -->\s*$/.exec(decoded);
-    publishedLabel = 'Snapshot pubblicato: ' + (stamp ? new Date(stamp[1]).toLocaleString('it-IT') : 'data non disponibile');
-    // The opaque-origin sandbox cannot read the parent's fragment/key.
-    frame.srcdoc = decoded;
-    frame.hidden = false;
-    help.hidden = true;
-    lastPayloadDigest = digest;
-    notice(publishedLabel);
-  } catch (error) { if (current === generation) notice(error.message || 'Impossibile aprire lo snapshot.'); }
-  finally { busy = false; if (current !== generation) refresh(); }
+async function keys(){
+ if(!window.isSecureContext||!crypto.subtle)throw new Error('Serve HTTPS per aprire la dashboard.');
+ if(!keyPromise)keyPromise=(async()=>{const raw=readKey();try{
+  const decrypt=await crypto.subtle.importKey('raw',raw,{name:'AES-GCM'},false,['decrypt']);
+  const signing=await crypto.subtle.importKey('raw',raw,{name:'HMAC',hash:'SHA-256'},false,['sign']);
+  const signed=new Uint8Array(await crypto.subtle.sign('HMAC',signing,new TextEncoder().encode('saver22-control-v1')));
+  const token=btoa(String.fromCharCode(...signed)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  return{decrypt,token};
+ }finally{raw.fill(0);}})();
+ return keyPromise;
 }
-document.getElementById('refresh').addEventListener('click', refresh);
-window.addEventListener('hashchange', () => {generation++; lastPayloadDigest = ''; frame.removeAttribute('srcdoc'); frame.hidden = true; help.hidden = false; refresh();});
-document.addEventListener('visibilitychange', () => {if (!document.hidden) refresh();});
-setInterval(refresh, 60000);
-refresh();
+async function fetchBounded(url,options={},milliseconds=15000){
+ const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),milliseconds);
+ try{return await fetch(url,{cache:'no-store',credentials:'omit',redirect: 'error',referrerPolicy:'no-referrer',...options,signal:controller.signal});}
+ finally{clearTimeout(timer);}
+}
+async function api(path,body){
+ if(!apiBase)throw new Error('Controlli manuali non disponibili: il collegamento al Mac non è configurato.');
+ const {token}=await keys();let response;
+ try{response=await fetchBounded(apiBase+path,{method:body===undefined?'GET':'POST',headers:{Authorization:'Bearer '+token,...(body===undefined?{}:{'Content-Type':'application/json'})},...(body===undefined?{}:{body:JSON.stringify(body)})});}
+ catch(_){throw new Error('Mac non raggiungibile. Nessuna modifica salvata; riprova quando è acceso e collegato.');}
+ if(!response.ok){let error;try{error=(await response.json()).error;}catch(_){}throw new Error(error||'Operazione non riuscita ('+response.status+'). Nessuna conferma di salvataggio.');}
+ return response;
+}
+async function apiJson(path,body){return(await api(path,body)).json();}
+async function applyPayload(payload,current){
+ if(current!==generation)return false;
+ if(payload.byteLength<28)throw new Error('Snapshot incompleto. L’ultima vista resta aperta.');
+ const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',payload)),b=>b.toString(16).padStart(2,'0')).join('');
+ if(digest===lastPayloadDigest)return false;
+ let decoded;try{const {decrypt}=await keys();const bytes=new Uint8Array(payload);decoded=new TextDecoder('utf-8',{fatal:true}).decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:bytes.slice(0,12)},decrypt,bytes.slice(12)));}
+ catch(_){throw new Error('Chiave errata o snapshot danneggiato. Verifica il collegamento privato.');}
+ if(current!==generation)return false;
+ const date=/data-last-success=["']([^"']+)["']/.exec(decoded);if(date)lastChecked(date[1]);
+ frame.srcdoc=decoded;frame.hidden=false;help.hidden=true;lastPayloadDigest=digest;return true;
+}
+async function refresh(force=false){
+ if(refreshBusy||(!force&&(document.hidden||actionBusy||manualBusy||dialogOpen)))return;
+ refreshBusy=true;const current=generation;
+ try{
+  await keys();let payload=null,live=false;
+  if(apiBase){try{payload=await(await api('/api/snapshot')).arrayBuffer();live=true;}catch(_){}}
+  if(!payload){const target=new URL('./payload.enc',location.origin+location.pathname);target.searchParams.set('v',Date.now().toString());const response=await fetchBounded(target.href);if(!response.ok)throw new Error('Snapshot non disponibile. Riprova tra poco.');payload=await response.arrayBuffer();}
+  const changed=await applyPayload(payload,current);
+  if(current===generation&&changed)notice(live?'Registro sincronizzato':'Snapshot pubblicato · Mac non collegato');
+ }catch(error){if(current===generation)notice(error.message||'Impossibile aprire lo snapshot.');}
+ finally{refreshBusy=false;if(current!==generation)refresh(true);}
+}
+function checkInfo(result){return result.check||result.job||{};}
+async function finishCheck(info,current){
+ if(current!==generation)return;
+ await refresh(true);
+ if(info.status==='error'||info.status==='failed')throw new Error(info.error||'Controllo Subito non riuscito: dati precedenti conservati.');
+ if(info.status==='already_running'||info.already_running){notice('Un altro controllo è già in corso. Il registro si aggiornerà alla conclusione.');return;}
+ const counts=info.summary||info.counts||{};
+ notice('Controllo completato: '+(counts.new||counts.new_count||0)+' nuovi annunci, '+(counts.price_drop||counts.price_drops||0)+' ribassi.');
+}
+async function waitCheck(current){
+ const deadline=Date.now()+630000;
+ while(Date.now()<deadline&&current===generation){
+  const result=await apiJson('/api/status');lastChecked(result.last_success_at);
+  const info=checkInfo(result);
+  if(info.status&& !['running','queued','starting'].includes(info.status)){await finishCheck(info,current);return;}
+  await new Promise(resolve=>setTimeout(resolve,2000));
+ }
+ if(current===generation)throw new Error('Il controllo richiede più tempo del previsto. Nessun risultato inventato: riprova tra poco.');
+}
+async function manualCheck(){
+ if(manualBusy||actionBusy||dialogOpen)return;
+ manualBusy=true;buttons();const current=generation;notice('Ricerca su Subito in corso…');
+ try{await apiJson('/api/check',{});await waitCheck(current);}
+ catch(error){if(current===generation)notice(error.message||'Controllo non riuscito.');}
+ finally{manualBusy=false;buttons();}
+}
+window.addEventListener('message',async event=>{
+ if(event.source!==frame.contentWindow||!event.data||typeof event.data!=='object')return;
+ const data=event.data;
+ if(data.type==='saver22:dialog-state'){dialogOpen=data.open===true;buttons();return;}
+ if(!['saver22:archive','saver22:restore'].includes(data.type))return;
+ if(typeof data.requestId!=='string'||!/^[A-Za-z0-9_.-]{1,100}$/.test(data.requestId))return;
+ const reply=(ok,error)=>frame.contentWindow.postMessage({type:'saver22:action-result',requestId:data.requestId,ok,...(error?{error}:{})},'*');
+ if(actionBusy||manualBusy){reply(false,'Attendi la conclusione dell’operazione in corso.');return;}
+ if(typeof data.id!=='string'||!/^\d{1,20}$/.test(data.id)){reply(false,'Identificativo annuncio non valido.');return;}
+ if(data.type==='saver22:archive'&&(!Array.isArray(data.reasons)||data.reasons.length>12||data.reasons.some(x=>typeof x!=='string'||x.length>160)||typeof data.note!=='string'||data.note.length>2000)){reply(false,'Motivazione non valida.');return;}
+ actionBusy=true;buttons();const current=generation;
+ try{
+  const archive=data.type==='saver22:archive';
+  const result=await apiJson(archive?'/api/archive':'/api/restore',{id:data.id,...(archive?{reasons:data.reasons,note:data.note}:{})});
+  if(result.ok!==true)throw new Error(result.error||'Salvataggio non confermato.');
+  if(current!==generation)return;
+  reply(true);dialogOpen=false;await refresh(true);
+  notice(archive?'Annuncio archiviato. Ti avviserò comunque in caso di ribasso.':'Annuncio ripristinato nella lista attiva.');
+ }catch(error){if(current===generation){reply(false,error.message||'Salvataggio non riuscito.');notice(error.message);}}
+ finally{actionBusy=false;buttons();}
+});
+checkButton.addEventListener('click',manualCheck);
+window.addEventListener('hashchange',()=>{generation++;keyPromise=null;lastPayloadDigest='';dialogOpen=false;frame.removeAttribute('srcdoc');frame.hidden=true;help.hidden=false;refresh(true);});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
+setInterval(()=>refresh(),60000);
+async function startup(){await refresh(true);if(apiBase){try{const state=await apiJson('/api/status');lastChecked(state.last_success_at);}catch(_){}}}
+startup();
 </script></body></html>
