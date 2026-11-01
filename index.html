@@ -6,6 +6,7 @@
 <title>Saver 22 · Vista privata</title>
 <style>
 *{box-sizing:border-box}html,body{height:100%;margin:0}body{font:15px system-ui,sans-serif;background:#f2f5f8;color:#172337;display:flex;flex-direction:column}header{padding:.65rem 1rem;background:#172337;color:#fff;display:flex;align-items:center;gap:.5rem 1rem;flex-wrap:wrap}h1{font-size:1rem;margin:0}.state{flex:1;min-width:180px}#status{margin:0;font-size:.84rem}#checked{display:block;margin-top:.2rem;font-size:.74rem;color:#b7cbe0}button{font:inherit;border:1px solid #a5b8cb;border-radius:6px;min-height:44px;padding:.4rem .7rem;background:transparent;color:inherit;cursor:pointer}button:disabled{opacity:.55;cursor:wait}iframe{border:0;display:block;width:100%;flex:1;min-height:0;background:#fff}iframe[hidden]{display:none}#help{max-width:650px;margin:10vh auto;padding:1.5rem;line-height:1.6}#help[hidden]{display:none}@media(max-width:600px){header{padding:.5rem}h1{flex:1}.state{order:3;width:100%;flex-basis:100%}}
+header{background:#fff;color:#173c42;border-bottom:1px solid #dce6e5;padding:12px 24px}#checked{color:#62777e}#status{font-size:.75rem;color:#47676d}header h1{font-size:.88rem;letter-spacing:-.02em}header button{background:#12645e;color:white;border:0;border-radius:10px;font-size:.8rem;font-weight:650;padding:10px 14px}.state{min-width:0}#checked{font-size:.7rem}#help{background:#fff;border-radius:18px}@media(max-width:600px){header{padding:10px 14px;gap:8px}header h1{display:none}.state{order:0;flex:1;width:auto;flex-basis:0}#checked{line-height:1.4}header button{flex-shrink:0;min-height:44px}}
 </style></head><body>
 <header><h1>Saver 22</h1><div class="state"><p id="status" role="status" aria-live="polite">Apertura protetta…</p><small id="checked">Controllo automatico ogni ora</small></div><button id="refresh" type="button">Controlla ora</button></header>
 <section id="help"><h2>Dashboard cifrata</h2><p id="message">Apri il collegamento privato completo, inclusa la parte dopo #. Non condividerlo.</p><p>«Controlla ora» avvia una nuova ricerca su Subito. Archiviazione e controlli manuali richiedono che il Mac sia acceso e collegato; in caso contrario resta disponibile l’ultima versione pubblicata.</p></section>
@@ -21,6 +22,7 @@ const help = document.getElementById('help');
 const message = document.getElementById('message');
 const checkButton = document.getElementById('refresh');
 let keyPromise=null, lastPayloadDigest='', generation=0, refreshBusy=false, manualBusy=false, actionBusy=false, dialogOpen=false;
+let savedView={view:'todo',query:''};
 function notice(text){status.textContent=text;if(frame.hidden){help.hidden=false;message.textContent=text;}}
 function buttons(){checkButton.disabled=manualBusy||actionBusy||dialogOpen;checkButton.textContent=manualBusy?'Controllo in corso…':'Controlla ora';}
 function lastChecked(value){if(value){const d=new Date(value);if(!Number.isNaN(d.getTime()))checked.textContent='Ultimo controllo Subito: '+d.toLocaleString('it-IT')+' · Ogni ora';}}
@@ -108,28 +110,32 @@ async function manualCheck(){
 window.addEventListener('message',async event=>{
  if(event.source!==frame.contentWindow||!event.data||typeof event.data!=='object')return;
  const data=event.data;
+ if(data.type==='saver22:view-state'&&['todo','contacted','archived'].includes(data.view)){savedView={view:data.view,query:typeof data.query==='string'?data.query.slice(0,500):''};return;}
+ if(data.type==='saver22:view-ready'){frame.contentWindow.postMessage({type:'saver22:restore-view',...savedView},'*');return;}
  if(data.type==='saver22:dialog-state'){dialogOpen=data.open===true;buttons();return;}
- if(!['saver22:archive','saver22:restore','saver22:contact','saver22:uncontact','saver22:notes'].includes(data.type))return;
+ if(!['saver22:archive','saver22:restore','saver22:contact','saver22:uncontact','saver22:notes','saver22:followup','saver22:followup_done'].includes(data.type))return;
  if(typeof data.requestId!=='string'||!/^[A-Za-z0-9_.-]{1,100}$/.test(data.requestId))return;
  const reply=(ok,error,extra={})=>frame.contentWindow.postMessage({type:'saver22:action-result',requestId:data.requestId,ok,...extra,...(error?{error}:{})},'*');
  if(actionBusy||manualBusy){reply(false,'Attendi la conclusione dell’operazione in corso.');return;}
  if(typeof data.id!=='string'||!/^\d{1,20}$/.test(data.id)){reply(false,'Identificativo annuncio non valido.');return;}
  if(data.type==='saver22:archive'&&(!Array.isArray(data.reasons)||data.reasons.length>12||data.reasons.some(x=>typeof x!=='string'||x.length>160)||typeof data.note!=='string'||data.note.length>2000)){reply(false,'Motivazione non valida.');return;}
  if(data.type==='saver22:notes'&&(typeof data.notes!=='string'||data.notes.length>4000||typeof data.expected_revision!=='string'||!/^[a-f0-9]{64}$/.test(data.expected_revision))){reply(false,'Note non valide.');return;}
+ if(data.type==='saver22:followup'&&(['phase','next_action','action_owner','reminder_at','activity','edit_id','expected_revision'].some(k=>typeof data[k]!=='string')||data.next_action.length>500||data.activity.length>2000)){reply(false,'Dati trattativa non validi.');return;}
+ if(data.type==='saver22:followup_done'&&(typeof data.expected_revision!=='string'||!/^[a-f0-9]{64}$/.test(data.expected_revision))){reply(false,'Revisione non valida.');return;}
  actionBusy=true;buttons();const current=generation;
  try{
   const archive=data.type==='saver22:archive';
   const action=data.type.slice('saver22:'.length);
-  const result=await apiJson('/api/'+action,{id:data.id,...(archive?{reasons:data.reasons,note:data.note}:action==='notes'?{notes:data.notes,expected_revision:data.expected_revision}:{})});
+  const result=await apiJson('/api/'+action,{id:data.id,...(archive?{reasons:data.reasons,note:data.note}:action==='notes'?{notes:data.notes,expected_revision:data.expected_revision}:action==='followup'?{phase:data.phase,next_action:data.next_action,action_owner:data.action_owner,reminder_at:data.reminder_at,activity:data.activity,edit_id:data.edit_id,expected_revision:data.expected_revision}:action==='followup_done'?{expected_revision:data.expected_revision}:{})});
   if(result.ok!==true)throw new Error(result.error||'Salvataggio non confermato.');
   if(current!==generation)return;
-  reply(true,undefined,action==='notes'?{notes_revision:result.notes_revision}:{});dialogOpen=false;await refresh(true);
-  notice({archive:'Annuncio archiviato. Ti avviserò comunque in caso di ribasso.',restore:'Annuncio ripristinato nella lista attiva.',contact:'Segnato come contattato. Nessun messaggio inviato automaticamente.',uncontact:'Stato contattato annullato.',notes:'Note salvate.'}[action]);
+  reply(true,undefined,action==='notes'?{notes_revision:result.notes_revision}:action.startsWith('followup')?{followup_editor:result.followup_editor}:{});dialogOpen=false;await refresh(true);
+  notice({archive:'Annuncio archiviato. Ti avviserò comunque in caso di ribasso.',restore:'Annuncio ripristinato nella lista attiva.',contact:'Segnato come contattato. Nessun messaggio inviato automaticamente.',uncontact:'Stato contattato annullato.',notes:'Note salvate.',followup:'Trattativa e reminder salvati.',followup_done:'Prossimo passo completato; reminder rimosso.'}[action]);
  }catch(error){if(current===generation){reply(false,error.message||'Salvataggio non riuscito.');notice(error.message);}}
  finally{actionBusy=false;buttons();}
 });
 checkButton.addEventListener('click',manualCheck);
-window.addEventListener('hashchange',()=>{generation++;keyPromise=null;lastPayloadDigest='';dialogOpen=false;frame.removeAttribute('srcdoc');frame.hidden=true;help.hidden=false;refresh(true);});
+window.addEventListener('hashchange',()=>{generation++;savedView={view:'todo',query:''};keyPromise=null;lastPayloadDigest='';dialogOpen=false;frame.removeAttribute('srcdoc');frame.hidden=true;help.hidden=false;refresh(true);});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
 setInterval(()=>refresh(),60000);
 async function startup(){await refresh(true);if(apiBase){try{const state=await apiJson('/api/status');lastChecked(state.last_success_at);}catch(_){}}}
