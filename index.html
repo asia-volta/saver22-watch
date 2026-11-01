@@ -22,7 +22,7 @@ const help = document.getElementById('help');
 const message = document.getElementById('message');
 const checkButton = document.getElementById('refresh');
 let keyPromise=null, lastPayloadDigest='', generation=0, refreshBusy=false, manualBusy=false, actionBusy=false, dialogOpen=false;
-let savedView={view:'todo',query:''};
+let savedView={view:'todo',query:'',due:false};
 function notice(text){status.textContent=text;if(frame.hidden){help.hidden=false;message.textContent=text;}}
 function buttons(){checkButton.disabled=manualBusy||actionBusy||dialogOpen;checkButton.textContent=manualBusy?'Controllo in corso…':'Controlla ora';}
 function lastChecked(value){if(value){const d=new Date(value);if(!Number.isNaN(d.getTime()))checked.textContent='Ultimo controllo Subito: '+d.toLocaleString('it-IT')+' · Ogni ora';}}
@@ -110,7 +110,7 @@ async function manualCheck(){
 window.addEventListener('message',async event=>{
  if(event.source!==frame.contentWindow||!event.data||typeof event.data!=='object')return;
  const data=event.data;
- if(data.type==='saver22:view-state'&&['todo','contacted','archived'].includes(data.view)){savedView={view:data.view,query:typeof data.query==='string'?data.query.slice(0,500):''};return;}
+ if(data.type==='saver22:view-state'&&['todo','contacted','archived'].includes(data.view)){savedView={view:data.view,query:typeof data.query==='string'?data.query.slice(0,500):'',due:data.due===true};return;}
  if(data.type==='saver22:view-ready'){frame.contentWindow.postMessage({type:'saver22:restore-view',...savedView},'*');return;}
  if(data.type==='saver22:dialog-state'){dialogOpen=data.open===true;buttons();return;}
  if(!['saver22:archive','saver22:restore','saver22:contact','saver22:uncontact','saver22:notes','saver22:followup','saver22:followup_done'].includes(data.type))return;
@@ -135,7 +135,7 @@ window.addEventListener('message',async event=>{
  finally{actionBusy=false;buttons();}
 });
 checkButton.addEventListener('click',manualCheck);
-window.addEventListener('hashchange',()=>{generation++;savedView={view:'todo',query:''};keyPromise=null;lastPayloadDigest='';dialogOpen=false;frame.removeAttribute('srcdoc');frame.hidden=true;help.hidden=false;refresh(true);});
+window.addEventListener('hashchange',()=>{generation++;savedView={view:'todo',query:'',due:false};keyPromise=null;lastPayloadDigest='';dialogOpen=false;frame.removeAttribute('srcdoc');frame.hidden=true;help.hidden=false;refresh(true);});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
 setInterval(()=>refresh(),60000);
 async function startup(){await refresh(true);if(apiBase){try{const state=await apiJson('/api/status');lastChecked(state.last_success_at);}catch(_){}}}
