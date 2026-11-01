@@ -108,7 +108,7 @@ window.addEventListener('message',async event=>{
  if(event.source!==frame.contentWindow||!event.data||typeof event.data!=='object')return;
  const data=event.data;
  if(data.type==='saver22:dialog-state'){dialogOpen=data.open===true;buttons();return;}
- if(!['saver22:archive','saver22:restore'].includes(data.type))return;
+ if(!['saver22:archive','saver22:restore','saver22:contact','saver22:uncontact'].includes(data.type))return;
  if(typeof data.requestId!=='string'||!/^[A-Za-z0-9_.-]{1,100}$/.test(data.requestId))return;
  const reply=(ok,error)=>frame.contentWindow.postMessage({type:'saver22:action-result',requestId:data.requestId,ok,...(error?{error}:{})},'*');
  if(actionBusy||manualBusy){reply(false,'Attendi la conclusione dell’operazione in corso.');return;}
@@ -117,11 +117,12 @@ window.addEventListener('message',async event=>{
  actionBusy=true;buttons();const current=generation;
  try{
   const archive=data.type==='saver22:archive';
-  const result=await apiJson(archive?'/api/archive':'/api/restore',{id:data.id,...(archive?{reasons:data.reasons,note:data.note}:{})});
+  const action=data.type.slice('saver22:'.length);
+  const result=await apiJson('/api/'+action,{id:data.id,...(archive?{reasons:data.reasons,note:data.note}:{})});
   if(result.ok!==true)throw new Error(result.error||'Salvataggio non confermato.');
   if(current!==generation)return;
   reply(true);dialogOpen=false;await refresh(true);
-  notice(archive?'Annuncio archiviato. Ti avviserò comunque in caso di ribasso.':'Annuncio ripristinato nella lista attiva.');
+  notice({archive:'Annuncio archiviato. Ti avviserò comunque in caso di ribasso.',restore:'Annuncio ripristinato nella lista attiva.',contact:'Segnato come contattato. Nessun messaggio inviato automaticamente.',uncontact:'Stato contattato annullato.'}[action]);
  }catch(error){if(current===generation){reply(false,error.message||'Salvataggio non riuscito.');notice(error.message);}}
  finally{actionBusy=false;buttons();}
 });
